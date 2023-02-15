@@ -9,9 +9,16 @@
 
 #include "main.h"
 
+#define MESSAGE_MAX_LENGTH	(64)
+
 static int completion_major = 0, completion_minor = 0;
 
 static struct completion_dev completion_dev;
+
+struct MESSAGE {
+	char buf[MESSAGE_MAX_LENGTH];
+	size_t length;
+} message;
 
 static
 int completion_open(struct inode *inode, struct file *filp)
@@ -28,14 +35,24 @@ static
 ssize_t completion_read(struct file *filp, char __user *buf, size_t count, loff_t *pos)
 {
 	struct completion_dev *dev = filp->private_data;
+	ssize_t len;
+	if(message.length != 0 && message.length <= *pos) {
+		pr_debug("process %d(%s) comes to end\n", current->pid, current->comm);
+		return 0;
+	}
 
 	pr_debug("%s() is invoked\n", __FUNCTION__);
-
 	pr_debug("process %d(%s) is going to sleep\n", current->pid, current->comm);
 	wait_for_completion(&dev->completion);
 	pr_debug("awoken %d(%s)\n", current->pid, current->comm);
 
-	return 0;
+	len = min((ssize_t)count, (ssize_t)message.length - (ssize_t)*pos);
+	if(copy_to_user(buf, message.buf + *pos, len)) {
+		return -EFAULT;
+	}
+	*pos += len;
+
+	return len;
 }
 
 static
@@ -43,8 +60,21 @@ ssize_t completion_write(struct file *filp, const char __user *buf, size_t count
 		       loff_t *pos)
 {
 	struct completion_dev *dev = filp->private_data;
+	size_t len;
 
+	memset(message.buf, 0, MESSAGE_MAX_LENGTH);
 	pr_debug("%s() is invoked\n", __FUNCTION__);
+
+	len = min((size_t)MESSAGE_MAX_LENGTH, count);
+	if(len <= 0) {
+		pr_debug("process %d(%s) comes to end\n", current->pid, current->comm);
+		return 0;
+	}
+	if(copy_from_user(message.buf, buf + *pos, len)) {
+		return -EFAULT;
+	}
+	message.length = len;
+	*pos += len;
 
 	pr_debug("process %d(%s) awakening the readers...\n",
 	       current->pid, current->comm);
